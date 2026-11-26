@@ -1,86 +1,129 @@
-% Faithful LaTeX transcription of ../sparse.md.
-
-\documentclass[11pt,letterpaper]{article}
+\documentclass[10pt,letterpaper]{article}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern}
-\usepackage{amsmath}
-\usepackage{array,tabularx}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs,tabularx}
 \usepackage{xcolor}
-\usepackage[margin=.84in,top=.72in,bottom=.78in]{geometry}
+\usepackage[margin=0.9in]{geometry}
+\setlength{\emergencystretch}{1em}
 \definecolor{linkblue}{RGB}{28,77,122}
 \usepackage[colorlinks=true,allcolors=linkblue]{hyperref}
-\setlength{\parindent}{0pt}
-\setlength{\parskip}{5pt plus 1pt}
-\setlength{\emergencystretch}{2em}
-\renewcommand{\arraystretch}{1.17}
-\raggedbottom
 
-\hypersetup{pdftitle={Bordered Cholesky for repeated sparse diagonal shifts}}
+\newtheorem{proposition}{Proposition}
+
+\hypersetup{
+  pdftitle={Bordered Cholesky for Repeated Sparse Diagonal Shifts},
+  pdfsubject={Sparse Linear Algebra}
+}
+
+\title{Bordered Cholesky for Repeated Sparse Diagonal Shifts}
+\author{}
+\date{}
 
 \begin{document}
+\maketitle
+\vspace{-2.5em}
 
-{\LARGE\bfseries\raggedright\hyphenpenalty=10000 Bordered Cholesky for repeated sparse diagonal shifts\par}
+\begin{abstract}
+Many numerical workflows solve a sequence of sparse symmetric positive-definite (SPD) linear systems whose matrix changes only at a small fixed set of diagonal positions. Moving those $k$ mutable variables to the end of the elimination order isolates every diagonal update inside a $k \times k$ trailing Schur-complement factor, leaving the leading interior factor and its coupling to the border invariant across requests. On 19 public SuiteSparse SPD matrices with eight mutable diagonal sites and twelve chronological requests per sequence, the bordered Cholesky solver achieved a median throughput of $2.15\times$ over a checked Woodbury baseline (95\% paired bootstrap interval $1.22\text{--}2.32\times$) and $1.28\times$ ($1.19\text{--}1.39\times$) over an adaptive factor-update solver. Charging both pipelines for the shared AMD ordering yielded a median speedup of $2.00\times$ ($1.21\text{--}2.19\times$). All 684 measured solutions passed an independent normwise backward-error check ($\eta \leq 10^{-11}$), with maximum backward error $2.14 \times 10^{-15}$ and worst relative forward error $0.53\%$.
+\end{abstract}
 
-\section*{Abstract}
+\section{Problem and Baseline}
 
-Many applications solve a sequence of sparse systems whose coefficients change at a few known diagonal positions. We move those variables to the end of the elimination order and replace a small trailing factor for each request. On 19 SuiteSparse SPD matrices with eight changing sites and twelve chronological requests, median sequence throughput was 2.15\(\times\) that of checked Woodbury and 1.28\(\times\) that of the preceding adaptive solver. The 95\% paired interval against Woodbury was 1.22--2.32\(\times\). Charging both methods for the shared AMD ordering gave 2.00\(\times\). All 684 measured solutions passed an independent backward-error test, and worst relative forward error was 0.53\%. \href{../../../manuscripts/summary.json}{Checked measurements} \textperiodcentered{} \href{../../../manuscripts/PROTOCOL.md}{Extension protocol}
-
-\section{Problem and baseline}
-
-Let \(A\) be a real symmetric positive-definite matrix and let the columns of \(E\) select \(k\) distinct coordinates. Request \(t\) supplies an independent right-hand side \(b_t\) and nonnegative shifts \(s_t\). It asks for the solution of \((A+E\,\mathrm{diag}(s_t)E^\top)x_t=b_t\). The solver knows \(A\) and the sites during setup. It sees the shifts and right-hand sides in chronological order.
-
-The control factors \(A\) in the supplied approximate minimum-degree order, computes \(A^{-1}E\), and solves a small dense system for each Woodbury correction. Its acceptance test recomputes a residual. On failure the control factors the shifted matrix. The preceding adaptive method selects a simplicial or supernodal kernel and can update its existing factor after a rejected correction. Its factorization threshold was tuned on these matrices. CHOLMOD's factorization and update routines and its authors' work on dynamic supernodes form the numerical baseline. \href{https://siva.science/publication/chen-2008-algorithm/}{Chen et al.} \textperiodcentered{} \href{https://people.clas.ufl.edu/hager/files/cholmod.pdf}{Davis and Hager} \textperiodcentered{} \href{https://sparse.tamu.edu/}{Sparse Matrix Collection}
-
-\section{A trailing block for the changing variables}
-
-Preserve the supplied relative order among interior variables \(I\) and append the mutable variables \(B\) in caller order. Block elimination gives the Schur complement
-
+Let $A \in \mathbb{R}^{n \times n}$ be a sparse real symmetric positive-definite (SPD) matrix, and let $E \in \mathbb{R}^{n \times k}$ be a column-selection matrix indexing $k$ distinct coordinates. In a chronological sequence of requests $t = 1, \dots, T$, request $t$ supplies a right-hand side $b_t \in \mathbb{R}^n$ and a vector of nonnegative diagonal shifts $s_t \in \mathbb{R}_{\ge 0}^k$, and asks for the solution $x_t$ of
 \[
-S=A_{BB}-A_{BI}A_{II}^{-1}A_{IB}.
+\bigl(A + E\,\operatorname{diag}(s_t)\,E^\top\bigr)x_t = b_t.
+\]
+The solver knows $A$ and the site set $B$ during setup, whereas $(s_t, b_t)$ arrive sequentially.
+
+The control baseline factors $A$ in a supplied approximate minimum-degree (AMD) permutation, computes the $k$ response columns $Y = A^{-1}E$, and solves a $k \times k$ dense system for each Woodbury correction. Every solve is checked by recomputing the residual; on failure the control factors the shifted matrix from scratch. The preceding adaptive solver selects a simplicial or supernodal CHOLMOD kernel and can apply low-rank factor updates after a rejected Woodbury correction, with its factorization threshold tuned on this cohort. CHOLMOD's sparse Cholesky and dynamic supernodal update routines~\cite{chen2008,davis2009} form the numerical foundation, evaluated on public matrices from the SuiteSparse Matrix Collection~\cite{davis2011}.
+
+\section{Trailing-Block Schur-Complement Invariance}
+
+Let $P$ be the permutation that preserves the supplied relative AMD order among the interior variables $I = \{1,\dots,n\} \setminus B$ and appends the mutable variables $B$ as a trailing suffix of length $k$ in caller order. Partitioning the permuted matrix yields
+\[
+P A P^\top = \begin{pmatrix} A_{II} & A_{IB} \\ A_{BI} & A_{BB} \end{pmatrix}.
 \]
 
-A request adds \(\mathrm{diag}(s_t)\) only to \(S\). The leading triangular factor and its coupling to the border are independent of \(t\). The SPD assumption guarantees positive definiteness of \(S+\mathrm{diag}(s_t)\) in exact arithmetic. The same block identity underlies static condensation in finite-element solvers. \href{https://docs.mfem.org/html/classmfem_1_1StaticCondensation.html}{MFEM's derivation}
-
-The implementation recovers \(S\) from the unshifted factor's trailing block in CHOLMOD's simplicial \(LDL^\top\) or supernodal \(LL^\top\) storage. For each request it factors the shifted block in extended precision, writes its entries into the existing storage, and runs the triangular solves. Reconstructing each shift from the saved base avoids accumulating update errors. A small pivot relative to its original diagonal triggers one correction with an extended-precision residual. Borders larger than 32 or unsuccessful numerical checks use the checked adaptive solver. \href{../../../workhorses/sparse_border.py}{Python interface} \textperiodcentered{} \href{../../../native/sparse_border.h}{Native factor implementation}
-
-\clearpage
-
-\section{Evaluation and accuracy}
-
-The frozen benchmark selects eight distinct sites on each of 19 public SPD patterns. Each matrix has twelve fixed systems with independently generated manufactured solution vectors. The benchmark forms each right-hand side by multiplying the shifted matrix by the manufactured vector. The timed solver receives the right-hand side alone with the requested shifts. An independent SciPy product checks the result and separately compares it to the manufactured solution. A warm-up and three measured sequences give 684 measured solutions per method. There are 19 independent matrix units. \href{../../../paper/inputs-sparse.json}{Matrix manifest} \textperiodcentered{} \href{../../../benchmarks/followup_sparse.py}{Request generator and verifier}
-
-For \(M=A+E\,\mathrm{diag}(s_t)E^\top\), the acceptance statistic is
-
+\begin{proposition}[Bordered factorization invariance]
+Let $P A P^\top = L L^\top$ be the Cholesky factorization of $P A P^\top$ (equivalently $P A P^\top = \tilde{L} D \tilde{L}^\top$ in simplicial $LDL^\top$ form), partitioned conformally as
 \[
-\eta=\frac{\lVert M\hat x-b\rVert_\infty}
-{\lVert M\rVert_\infty\lVert\hat x\rVert_\infty+\lVert b\rVert_\infty}.
+L = \begin{pmatrix} L_{II} & 0 \\ L_{BI} & L_{BB} \end{pmatrix}.
 \]
+Then the trailing block satisfies $L_{BB} L_{BB}^\top = S := A_{BB} - A_{BI} A_{II}^{-1} A_{IB} \succ 0$. For any nonnegative shift vector $s_t \in \mathbb{R}_{\ge 0}^k$, the shifted matrix $M_t = A + E\,\operatorname{diag}(s_t)\,E^\top$ is SPD and admits the exact Cholesky factor
+\[
+L(s_t) = \begin{pmatrix} L_{II} & 0 \\ L_{BI} & L_{BB}(s_t) \end{pmatrix},
+\]
+where $L_{BB}(s_t)$ is the Cholesky factor of $S + \operatorname{diag}(s_t) \succ 0$. Moreover, the symbolic sparsity pattern of $L_{BB}(s_t)$ is contained in that of $L_{BB}$.
+\end{proposition}
 
-The required bound is \(\eta\leq 10^{-11}\). Forward error is reported separately because conditioning can amplify a small backward error. Moving variables can increase fill, so we charge setup and all twelve solves. We take a median time within each matrix and then a median of the paired ratios. A second estimate adds the shared AMD ordering time to both methods. \href{../../../benchmarks/twice_sparse.py}{Timing harness}
+\begin{proof}
+Expanding $L L^\top = P A P^\top$ gives $L_{II} L_{II}^\top = A_{II}$, $L_{BI} = A_{BI} L_{II}^{-\top}$, and $L_{BB} L_{BB}^\top = A_{BB} - L_{BI} L_{BI}^\top = A_{BB} - A_{BI} A_{II}^{-1} A_{IB} = S$. Because $A \succ 0$, its principal submatrix $A_{II}$ and Schur complement $S$ are SPD. Replacing $A_{BB}$ by $A_{BB} + \operatorname{diag}(s_t)$ leaves $A_{II}$ and $A_{IB}$ (hence $L_{II}$ and $L_{BI}$) unchanged and shifts $S$ to $S + \operatorname{diag}(s_t) \succ 0$. Since adding positive diagonal entries does not introduce new off-diagonal nonzeros in $A$, the elimination graph and chordal fill pattern of $P M_t P^\top$ coincide with those of $P A P^\top$, so $L_{BB}(s_t)$ requires no entries outside the symbolic storage of $L_{BB}$.
+\end{proof}
 
-\section{Results and limits}
+The same block reduction underlies static condensation in finite-element solvers~\cite{mfem}. Our native implementation (\nolinkurl{native/sparse_border.h}) recovers the $k \times k$ base Schur complement $S$ directly from the unshifted trailing block in either CHOLMOD's simplicial $LDL^\top$ or supernodal $LL^\top$ storage. For each request $t$, it computes the Cholesky factor of $S + \operatorname{diag}(s_t)$ in extended precision (\texttt{long double}), writes the updated trailing entries into the existing factor storage (converting back to $LDL^\top$ when simplicial), and executes CHOLMOD's triangular solves. Factoring $S + \operatorname{diag}(s_t)$ from the saved base $S$ avoids drift across chronological updates. If any unshifted pivot falls below $10^{-8}$ times its original diagonal entry, the solver performs one step of iterative refinement with an extended-precision residual. Borders exceeding $k = 32$ or any failed numerical check automatically fall back to the checked adaptive solver.
 
-The previous adaptive method passed 684/684 independent checks and replaced 108 fresh shifted factorizations with factor updates. Its median speedup over checked Woodbury was 1.50\(\times\) [1.06--1.72]. Worst relative forward error was 0.48\% for the adaptive method and 0.58\% for the control. A zero-fill incomplete Cholesky method solved 216 requests iteratively and sent the remaining 468 through a checked direct solver. Its median speed ratio was 0.88\(\times\). \href{../../../twice/summary.json}{Earlier matrix-level and accuracy results}
+\section{Evaluation Protocol and Accuracy}
 
-\par\smallskip
-\begingroup\small
-\setlength{\tabcolsep}{5pt}
-\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}X>{\centering\arraybackslash}p{1.08in}>{\centering\arraybackslash}p{1.08in}>{\centering\arraybackslash}p{0.96in}}
-\hline
-\textbf{Same-run measure} & \textbf{Checked Woodbury} & \textbf{Adaptive recovery} & \textbf{Trailing block} \\
-\hline
-Sequence speed relative to Woodbury & 1.00\(\times\) & 1.44\(\times\) & 2.15\(\times\) \\
-Speed including shared AMD & 1.00\(\times\) & 1.40\(\times\) & 2.00\(\times\) \\
-Largest independent backward error & \(1.94 \times 10^{-13}\) & \(1.94 \times 10^{-13}\) & \(2.14 \times 10^{-15}\) \\
-Largest relative forward error & 0.58\% & 0.48\% & 0.53\% \\
+The frozen benchmark selects eight distinct diagonal sites on each of 19 public SPD matrix patterns from SuiteSparse. Each pattern has twelve fixed requests with independently generated manufactured solution vectors $x_t^*$; each right-hand side is formed as $b_t = M_t x_t^*$, while the timed solver receives only $(s_t, b_t)$. An independent SciPy sparse matrix-vector product verifies every returned vector $\hat{x}_t$ against the normwise backward error
+\[
+\eta = \frac{\lVert M_t \hat{x}_t - b_t \rVert_\infty}{\lVert M_t \rVert_\infty \lVert \hat{x}_t \rVert_\infty + \lVert b_t \rVert_\infty},
+\]
+requiring $\eta \leq 10^{-11}$, and records the relative forward error $\lVert \hat{x}_t - x_t^* \rVert_\infty / \lVert x_t^* \rVert_\infty$ separately. One warm-up and three measured sequences yield $19 \times 12 \times 3 = 684$ measured solves per method across 19 independent matrix units. Because moving $B$ to the suffix can alter fill, total timed work charges both setup and all twelve solves. Within each matrix we take the median sequence time across repeats, and across the 19 matrices we report the median paired speed ratio with 95\% bootstrap intervals. A second metric adds the shared AMD ordering time to both methods.
+
+\section{Results and Limitations}
+
+In the preceding benchmark run, adaptive recovery passed 684/684 checks, replaced all 108 Woodbury fallbacks with factor updates, and achieved a $1.50\times$ ($1.06\text{--}1.72\times$) median speedup over checked Woodbury (worst relative forward error $0.48\%$ vs.\ $0.58\%$). A zero-fill incomplete Cholesky PCG baseline solved 216 requests iteratively and fell back to a direct solver on 468 requests, yielding $0.88\times$ median throughput.
+
+\begin{table}[ht]
+\centering
+\small
+\caption{Same-run comparison across 19 SuiteSparse SPD matrices (684 measured requests per method).}
+\label{tab:sparse}
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}Xccc}
+\toprule
+\textbf{Same-run measure} & \textbf{Checked Woodbury} & \textbf{Adaptive recovery} & \textbf{Bordered Cholesky} \\
+\midrule
+Sequence speed relative to Woodbury & $1.00\times$ & $1.44\times$ & $2.15\times$ \\
+Speed including shared AMD & $1.00\times$ & $1.40\times$ & $2.00\times$ \\
+Largest independent backward error & $1.94 \times 10^{-13}$ & $1.94 \times 10^{-13}$ & $2.14 \times 10^{-15}$ \\
+Largest relative forward error & $0.58\%$ & $0.48\%$ & $0.53\%$ \\
 Verified measured requests & 684/684 & 684/684 & 684/684 \\
-\hline
+\bottomrule
 \end{tabularx}
-\endgroup
-\par\smallskip
+\end{table}
 
-The bordered solver used its trailing block on all measured requests. Eleven of the 19 matrices individually crossed 2\(\times\). Speed ratios ranged from 1.11\(\times\) to 15.12\(\times\). The direct paired comparison with adaptive recovery was 1.28\(\times\) [1.19--1.39]. Including shared AMD gave 2.00\(\times\) [1.21--2.19] against Woodbury. The interval spans gains below twofold, and the largest forward error rose from the preceding adaptive solver's 0.48\% to 0.53\%. The matrix with the largest forward error was Oberwolfach/LF10000. \href{../../../manuscripts/runs/sparse.jsonl}{Per-matrix attempts} \textperiodcentered{} \href{../../../manuscripts/summary.json}{Aggregated results}
+The bordered solver stayed on its trailing-block fast path for all 684 measured requests with zero fallbacks. Eleven of the 19 matrices individually exceeded $2\times$ speedup over checked Woodbury, with per-matrix ratios ranging from $1.11\times$ (\texttt{JGD\_Trefethen/Trefethen\_2000}) to $15.12\times$ (\texttt{FIDAP/ex15}). The paired speedup was $2.15\times$ ($1.22\text{--}2.32\times$) over checked Woodbury, $1.28\times$ ($1.19\text{--}1.39\times$) directly over adaptive recovery, and $2.00\times$ ($1.21\text{--}2.19\times$) against Woodbury when charging the shared AMD ordering time. The worst relative forward error occurred on \texttt{Oberwolfach/LF10000} ($0.53\%$ vs.\ $0.48\%$ for adaptive recovery and $0.58\%$ for Woodbury).
 
-The measured ratio combines the border ordering, removal of response-column setup and a native residual check. An ablation would be needed to apportion their costs. The study covers fixed sites and nonnegative shifts on SPD matrices. New patterns, changing sites and different sequence lengths would test how far the result transfers.
+The measured speedup reflects the combined effects of trailing-border ordering, eliminating response-column solves during setup, and native residual verification; a dedicated ablation is needed to separate those contributions. The evaluation scope covers fixed site sets of size $k = 8$, nonnegative diagonal shifts on SPD matrices, and 12-request sequences; generalizing to larger or changing site sets and different sequence lengths remains for future work.
+
+\paragraph{Code and data availability.}
+The native bordered implementation (\nolinkurl{native/sparse_border.h}), Python wrapper (\nolinkurl{workhorses/sparse_border.py}), regression tests (\nolinkurl{tests/test_native.py}), benchmark harness (\nolinkurl{benchmarks/twice_sparse.py}), frozen matrix manifest (\nolinkurl{paper/inputs-sparse.json}), and archived journals (\nolinkurl{manuscripts/runs/sparse.jsonl}, \nolinkurl{manuscripts/summary.json}) are included in the repository.
+
+\begin{thebibliography}{4}
+\bibitem{chen2008}
+Y.~Chen, T.~A. Davis, W.~W. Hager, and S.~Rajamanickam.
+\newblock Algorithm 887: CHOLMOD, supernodal sparse Cholesky factorization and update/downdate.
+\newblock \emph{ACM Transactions on Mathematical Software}, 35(3):22:1--22:14, 2008.
+\newblock \href{https://doi.org/10.1145/1391989.1391995}{doi:10.1145/1391989.1391995}.
+
+\bibitem{davis2009}
+T.~A. Davis and W.~W. Hager.
+\newblock Dynamic supernodes in sparse Cholesky update/downdate and triangular solves.
+\newblock \emph{ACM Transactions on Mathematical Software}, 35(4):27:1--27:23, 2009.
+\newblock \href{https://doi.org/10.1145/1462173.1462176}{doi:10.1145/1462173.1462176}.
+
+\bibitem{davis2011}
+T.~A. Davis and Y.~Hu.
+\newblock The University of Florida Sparse Matrix Collection.
+\newblock \emph{ACM Transactions on Mathematical Software}, 38(1):1:1--1:25, 2011.
+\newblock \href{https://sparse.tamu.edu/}{sparse.tamu.edu}.
+
+\bibitem{mfem}
+MFEM Contributors.
+\newblock Static condensation (\texttt{mfem::StaticCondensation}).
+\newblock \href{https://docs.mfem.org/html/classmfem_1_1StaticCondensation.html}{MFEM Documentation}.
+\end{thebibliography}
 
 \end{document}
